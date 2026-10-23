@@ -40,7 +40,30 @@
       this.mapCv = el('canvas', { class: 'mp-map' });
       this.cbarCv = el('canvas', { class: 'mp-cbar' });
       this.tip = el('div', { class: 'mp-tip', hidden: true });
-      this.figure = el('div', { class: 'mp-figure' }, this.mapCv, this.cbarCv, this.tip);
+      this.head3d = EEG.Head3D && EEG.Head3D.supported() ? new EEG.Head3D() : null;
+      if (this.head3d && !this.head3d.ok) this.head3d = null;
+      this.figure = el('div', { class: 'mp-figure' }, this.mapCv, this.head3d ? this.head3d.root : null, this.cbarCv, this.tip);
+      if (this.head3d) {
+        const V = EEG.Head3D.VIEWS;
+        if (o.cam) {
+          this.head3d.az = o.cam.az;
+          this.head3d.el = o.cam.el;
+        }
+        this.head3d.onView = (az, el2) => {
+          this.o.cam = { az, el: el2 };
+          app.saveSettings();
+        };
+        this.head3d.onHover = (e, x, y) => this._hover3d(e, x, y);
+        this.head3d.ov.addEventListener('contextmenu', (ev) => {
+          const h = this._hoverElectrode;
+          if (!h) return;
+          ev.preventDefault();
+          app.menu(ev.clientX, ev.clientY, [{ label: `Exclude ${h.label} from maps & average`, action: () => app.toggleBad(h.idx, true) }]);
+        });
+        this.viewRow = el('div', { class: 'mp-views' },
+          ...Object.entries(V).map(([k, v]) => el('button', { class: 'chip-btn', title: `View from ${v.label.toLowerCase().replace('l basal', 'the left, from below').replace('r basal', 'the right, from below')}`, onclick: () => this.head3d.setView(k) }, v.label)),
+          el('button', { class: 'btn xs ghost', title: 'Save all seven standard views as one PNG image', onclick: () => this.exportViewsPNG(), html: ICON('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>', 14) + 'All views' }));
+      }
       this.readout = el('div', { class: 'mp-readout' });
 
       // controls
@@ -116,7 +139,10 @@
         e.stopPropagation();
         app.showHelp('guide');
       }, html: ICON('<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>', 14) + 'Guide' }));
-      this.body = el('div', { class: 'mp-body' }, this.head, this.figure, this.readout, this.controls, this.bfSec, this.seqSec);
+      this.dimSeg = seg('dim', [['2d', '2D', 'Flat map seen from above'], ['3d', '3D', 'Map on a 3D head: drag to rotate, presets below']], o.dim || '2d', (v) => this.set({ dim: v }));
+      this.dimSeg.hidden = !this.head3d;
+      this.head.querySelector('.mp-nav').prepend(this.dimSeg);
+      this.body = el('div', { class: 'mp-body' }, this.head, this.figure, this.viewRow || null, this.readout, this.controls, this.bfSec, this.seqSec);
       this.root.append(this.empty, this.body);
       this._bindCanvas();
       this.showEmpty(true);
@@ -135,14 +161,22 @@
         neg = EEG.topo.cssColor(this.o.cmap, this.o.invert, -0.85);
       return `<span class="dot" style="background:${pos}"></span>+ <span class="dot" style="background:${neg}"></span>−`;
     }
+    is3d() {
+      return !!this.head3d && this.o.dim === '3d';
+    }
     _syncFixed() {
       this.fixedIn.hidden = this.o.scale !== 'fixed';
+      const d3 = this.is3d();
+      this.mapCv.hidden = d3;
+      if (this.head3d) this.head3d.root.hidden = !d3;
+      if (this.viewRow) this.viewRow.hidden = !d3;
       this.refSel.disabled = this.o.kind === 'CSD';
     }
     /* Reflect current settings in the controls (after programmatic changes / reset). */
     syncControls() {
       const o = this.o;
       this.modeSeg.querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', (i === 0 ? 'V' : 'CSD') === o.kind));
+      this.dimSeg.querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', (i === 0 ? '2d' : '3d') === (o.dim || '2d')));
       this.refSel.value = o.ref;
       this.scaleSel.value = o.scale;
       this.fixedIn.value = o.fixed;
@@ -305,11 +339,23 @@
       this.geom = { cx: size / 2, cy: size / 2 + 4, R, size };
       const evals = d.ev.subarray(k * d.E, (k + 1) * d.E);
       const hl = app.highlightElectrodes();
-      const ex = EEG.topo.draw(ctx, d.plan, this.g, evals, {
-        cx: size / 2, cy: size / 2 + 4, R, vmax, cmap: o.cmap, invert: o.invert, contours: o.contours,
-        labels: o.labels, values: o.values, equator: o.equator, theme: { line: th.text, muted: th.text3 }, excluded: d.excluded.filter((x) => x.why === 'excluded'), font: th.font,
-        highlight: d.used.map((u, i) => (hl.has(u.idx) ? i : -1)).filter((i) => i >= 0), hlColor: th.accent,
-      });
+      const hlIdx = d.used.map((u, i) => (hl.has(u.idx) ? i : -1)).filter((i) => i >= 0);
+      let ex;
+      if (this.is3d()) {
+        this.head3d.resize(size);
+        this.head3d.setScene({ plan: d.plan, values, evals, vmax, cmap: o.cmap, invert: o.invert, contours: o.contours, labels: o.labels, showValues: o.values, equator: o.equator, excluded: d.excluded.filter((x) => x.why === 'excluded'), highlight: hlIdx, unit: d.unit });
+        ex = { iMax: 0, iMin: 0 };
+        for (let e = 0; e < d.E; e++) {
+          if (evals[e] > evals[ex.iMax]) ex.iMax = e;
+          if (evals[e] < evals[ex.iMin]) ex.iMin = e;
+        }
+      } else {
+        ex = EEG.topo.draw(ctx, d.plan, this.g, evals, {
+          cx: size / 2, cy: size / 2 + 4, R, vmax, cmap: o.cmap, invert: o.invert, contours: o.contours,
+          labels: o.labels, values: o.values, equator: o.equator, theme: { line: th.text, muted: th.text3 }, excluded: d.excluded.filter((x) => x.why === 'excluded'), font: th.font,
+          highlight: hlIdx, hlColor: th.accent,
+        });
+      }
       const cctx = U.fitCanvas(this.cbarCv, 52, size);
       cctx.clearRect(0, 0, 52, size);
       EEG.topo.drawColorbar(cctx, 6, 20, 12, size - 56, { cmap: o.cmap, invert: o.invert, vmax, theme: { line: th.text2, text: th.text2 }, unit: d.unit, font: th.font });
@@ -521,6 +567,24 @@
       app.traceView.drawOverlay();
     }
 
+    _hover3d(e, x, y) {
+      const d = this.data;
+      if (e == null || !d) {
+        this.tip.hidden = true;
+        this._hoverElectrode = null;
+        return;
+      }
+      const k = this.kAt(this.app.cursor);
+      const v = d.ev[k * d.E + e];
+      const fr = this.figure.getBoundingClientRect(),
+        hr = this.head3d.ov.getBoundingClientRect();
+      this.tip.textContent = `${d.used[e].label}: ${(v > 0 ? '+' : '') + U.fmtNum(v, 1)} ${d.unit}`;
+      this.tip.style.left = hr.left - fr.left + x + 14 + 'px';
+      this.tip.style.top = hr.top - fr.top + y + 10 + 'px';
+      this.tip.hidden = false;
+      this._hoverElectrode = d.used[e];
+    }
+
     /* ---------- interaction on map & butterfly ---------- */
     _bindCanvas() {
       this.mapCv.addEventListener('pointermove', (e) => {
@@ -614,6 +678,7 @@
     exportPNG() {
       const d = this.data;
       if (!d || !d.plan) return;
+      if (this.is3d()) return this.export3D();
       const app = this.app,
         o = this.o;
       const S = 720,
@@ -631,6 +696,56 @@
       EEG.topo.draw(ctx, plan, g, d.ev.subarray(k * d.E, (k + 1) * d.E), { cx: 40 + S / 2, cy: y0 + S / 2, R: S / 2 - 50, vmax, cmap: o.cmap, invert: o.invert, contours: o.contours, labels: true, values: o.values, equator: o.equator, theme: { line: '#222', muted: '#888' }, excluded: d.excluded.filter((x) => x.why === 'excluded'), fontSize: 15 });
       EEG.topo.drawColorbar(ctx, S + 90, y0 + 60, 26, S - 160, { cmap: o.cmap, invert: o.invert, vmax, theme: { line: '#333', text: '#333' }, unit: d.unit });
       cv.toBlob((b) => U.download(b, `voltage-map_${app.fileStem()}_${app.fmtClock(d.t0 + k / d.fs, true).replace(/[:.]/g, '-')}.png`));
+    }
+    /* Current 3D view, large, with header and colour bar. */
+    export3D() {
+      const d = this.data,
+        app = this.app,
+        o = this.o;
+      const S = 720,
+        W = 980;
+      const cv = document.createElement('canvas');
+      cv.width = W;
+      cv.height = S + 200;
+      const ctx = cv.getContext('2d');
+      const k = this.kAt(app.cursor);
+      const y0 = this._exportHeader(ctx, W, `Voltage map (3D${this.head3d.viewName() ? ', ' + this.head3d.viewName().toLowerCase() + ' view' : ''}) · ${app.fmtClock(d.t0 + k / d.fs, true)}`);
+      this.head3d.drawInto(ctx, 40, y0, S);
+      EEG.topo.drawColorbar(ctx, S + 90, y0 + 60, 26, S - 160, { cmap: o.cmap, invert: o.invert, vmax: this.vmax, theme: { line: '#333', text: '#333' }, unit: d.unit });
+      cv.toBlob((b) => U.download(b, `voltage-map-3d_${app.fileStem()}_${app.fmtClock(d.t0 + k / d.fs, true).replace(/[:.]/g, '-')}.png`));
+    }
+    /* All seven standard views of the current map in one figure. */
+    exportViewsPNG() {
+      const d = this.data;
+      if (!d || !d.plan || !this.head3d) return;
+      const app = this.app,
+        o = this.o;
+      const V = EEG.Head3D.VIEWS,
+        keys = Object.keys(V);
+      const S = 300,
+        gap = 16,
+        cols = 4,
+        rows = 2;
+      const W = 40 + cols * (S + gap);
+      const cv = document.createElement('canvas');
+      cv.width = W;
+      cv.height = 170 + rows * (S + 30) + 10;
+      const ctx = cv.getContext('2d');
+      const k = this.kAt(app.cursor);
+      const y0 = this._exportHeader(ctx, W, `Voltage map, standard views · ${app.fmtClock(d.t0 + k / d.fs, true)}`);
+      keys.forEach((key, i) => {
+        const x = 40 + (i % cols) * (S + gap),
+          y = y0 + Math.floor(i / cols) * (S + 30);
+        this.head3d.drawInto(ctx, x, y, S, key);
+        ctx.fillStyle = '#333';
+        ctx.font = '600 15px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(V[key].label, x + S / 2, y + S + 18);
+      });
+      const x = 40 + 3 * (S + gap),
+        y = y0 + S + 30;
+      EEG.topo.drawColorbar(ctx, x + S / 2 - 40, y + 20, 22, S - 60, { cmap: o.cmap, invert: o.invert, vmax: this.vmax, theme: { line: '#333', text: '#333' }, unit: d.unit });
+      cv.toBlob((b) => U.download(b, `voltage-map-views_${app.fileStem()}_${app.fmtClock(d.t0 + k / d.fs, true).replace(/[:.]/g, '-')}.png`));
     }
     exportSequencePNG() {
       const d = this.data;

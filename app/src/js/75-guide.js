@@ -11,13 +11,15 @@
   <li><b>Click</b> on the EEG at the moment you want to see, for example the peak of a spike. The red line is the <i>map cursor</i>; the map shows the scalp field at exactly that instant. The trace you clicked on is highlighted and its electrodes are ringed in blue on the map.</li>
   <li><b>Drag</b> across the whole discharge (typically 100–300 ms). You then also get the butterfly plot, the global field power (GFP) and a <i>map sequence</i>, and the cursor jumps to the moment of strongest field (GFP maximum).</li>
   <li><b>Fine-tune</b> the time point with <kbd>Alt</kbd>+<kbd>←</kbd>/<kbd>→</kbd> (one sample, 3.9 ms at 256 Hz), by dragging the cursor line, or with <kbd>Alt</kbd>+click on a trace, which snaps to that trace's nearest peak.</li>
-  <li>For several similar potentials, <b>average</b> them (see <a href="#g-avg" data-jump>Averaging a group</a>): the average shows the consistent field much more clearly than any single event.</li>
+  <li>For several similar potentials, <b>average</b> them (see <a href="#g-avg" data-jump>Averaging a group</a>): the average shows the consistent field much more clearly than any single event. Right-click one potential and choose <b>Find similar</b> to let the viewer collect the others (see <a href="#g-find" data-jump>Finding similar potentials</a>).</li>
+  <li>Switch the map to <b>3D</b> to see the field on a head, including the basal temporal region from below (see <a href="#g-3d" data-jump>3D view</a>).</li>
 </ol>
 <p class="note">The map is always computed from all referential recordings (each electrode against the recording reference), filtered with the global filters. The montage on screen and any per-trace gain or filter changes do not alter the map.</p>
 
 <h3 id="g-controls">The controls</h3>
 <dl class="ctl">
   <dt>Time and ‹ ›</dt><dd>Time of the map. The arrows move the cursor by one sample. Inside an average, times are given relative to the alignment point (0 ms).</dd>
+  <dt>2D | 3D</dt><dd>Flat map seen from above, or the same map on a 3D head. In 3D, drag to rotate; the buttons below the head give standard views, and <b>All views</b> saves all seven as one image.</dd>
   <dt>Map: Potential | CSD</dt><dd><b>Potential</b> shows the voltage at each point of the scalp (µV). <b>CSD</b> (current source density) shows where current enters or leaves the scalp; it sharpens focal activity and does not depend on the reference (see <a href="#g-csd" data-jump>CSD</a>).</dd>
   <dt>Average / Recording reference</dt><dd>Which reference the potential map uses. <b>Average reference</b> (default) subtracts the mean of all mapped electrodes at each instant. <b>Recording reference</b> shows the values as recorded against the amplifier reference (see <a href="#g-ref" data-jump>Reference</a>).</dd>
   <dt>Scale</dt><dd><b>Whole window</b>: one colour scale for the butterfly window or the selection, so maps at different moments can be compared. <b>Each map</b>: every map uses its own full colour range, which shows the pattern of weak fields but exaggerates noise. <b>Fixed ±</b>: a value you type in, useful when comparing different events.</dd>
@@ -48,6 +50,26 @@
   <li><b>As marked</b>: no re-alignment.</li>
 </ul>
 <p class="note">Only average potentials that belong together: the same morphology and the same field. If two spike populations are mixed, the average shows a blurred, intermediate map that may resemble neither. Check single events first and leave artefacts out; one large artefact can dominate an average of a few events. Events whose epoch reaches beyond the recording or into a recording gap are skipped.</p>
+
+<h3 id="g-find">Finding similar potentials</h3>
+<p>Marking dozens of spikes by hand over a long recording is slow. <b>Find similar</b> searches the whole recording for potentials that resemble a group and lets you review them one by one.</p>
+<h4>How it works</h4>
+<p>The group's events are aligned and averaged; this average, filtered with the current filters and on the average reference, is the <b>template</b>: the voltage at every mapped electrode over a short window (default ±100 ms around the alignment point). The viewer then slides the template along the recording and, at every sample, computes the correlation <b>r</b> between the template and the EEG under it, using all electrodes and all time points together. r = 1 means the same topography, polarity and time course; r is independent of amplitude, so the amplitude ratio is shown separately. Candidates are moments where r peaks above the threshold (default 0.80) with an amplitude between half and twice the template, at least 200 ms apart. A 3-hour recording is searched in a few seconds.</p>
+<h4>How to</h4>
+<ol>
+  <li>Right-click a potential on the EEG and choose <b>Find similar potentials</b>. This puts it into a new group and starts the search. For an existing group, press the magnifier next to it (or <kbd>F</kbd>).</li>
+  <li><b>Next ▶</b> jumps to each candidate and maps it. Press <kbd>Y</kbd> to add it to the group or <kbd>X</kbd> to reject it; both move on to the next candidate. <b>Add all</b> accepts every remaining candidate that passes the thresholds.</li>
+  <li><b>Average</b> the group. With more events in the group, <b>Search again</b> uses a better template; two or three rounds usually converge.</li>
+</ol>
+<p class="note">Find similar is a screening aid: every candidate needs your review. A lower threshold finds more true events but also more look-alikes. Artefacts with a similar field can match (for example, eye movements for frontopolar spikes). The template window decides what must match: ±50 ms compares mainly the spike, longer windows include the after-going slow wave. Excluded electrodes are left out of both template and search.</p>
+
+<h3 id="g-3d">3D view</h3>
+<p>The 3D view shows the same interpolated field as the flat map, on a head shape that you can rotate. The values are identical; only the way they are drawn differs.</p>
+<ul>
+  <li>The flat map stretches the lower parts of the head, like a world map. The 3D view shows them undistorted, but only one side at a time. <b>L basal</b> and <b>R basal</b> look at the head from the side and slightly below, where the inferior temporal electrodes (F9/T9/P9, F10/T10/P10) lie.</li>
+  <li>Grey areas lie beyond the mapped region (more than 10° below the lowest electrodes) or on the nose and ears; the map is not extrapolated there. The dashed line is the 10-20 equator.</li>
+  <li>The head is a schematic shape for orientation, not the patient's anatomy.</li>
+</ul>
 
 <h3 id="g-what">What a voltage map shows</h3>
 <p>A montage shows voltage <i>differences</i> between pairs of electrodes, as curves over time. A voltage map turns this around: it shows the voltage at <i>all</i> electrodes at <i>one instant</i>, as a picture of the head seen from above (nose at the top, left hemisphere on the left). Colour codes the voltage, values between electrodes are estimated by interpolation, and isolines join points of equal voltage.</p>
@@ -126,6 +148,8 @@
   <dt>Hjorth</dt><dd>Source derivation: electrode minus the weighted mean of its neighbours (Quellenableitung).</dd>
   <dt>Zero-phase filter</dt><dd>Filter run forwards and backwards so that it does not shift peaks in time.</dd>
   <dt>Alignment point</dt><dd>0 ms of an average: the marked time, or the peak each mark was moved to.</dd>
+  <dt>Template</dt><dd>The averaged pattern (all electrodes over a short window) that Find similar looks for.</dd>
+  <dt>r</dt><dd>Correlation between template and EEG, from −1 to 1; 1 = identical shape, regardless of amplitude.</dd>
 </dl>
 
 <h3 id="g-refs">Literature</h3>

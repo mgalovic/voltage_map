@@ -415,6 +415,38 @@
           ctx.restore();
         }
       }
+      // find-similar candidates still to review (dashed, with their similarity)
+      const cands = app.findInView ? app.findInView() : [];
+      if (cands.length) {
+        const g = app.groupById(app.find.gid);
+        const col = g ? g.color : th.accent;
+        ctx.font = '600 10px ' + th.font;
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'left';
+        for (const c of cands) {
+          const x = Math.round(this.xOf(c.t)) + 0.5,
+            cur = app.find.cur === c;
+          ctx.strokeStyle = col;
+          ctx.globalAlpha = cur ? 1 : 0.65;
+          ctx.lineWidth = cur ? 2 : 1;
+          ctx.setLineDash([5, 4]);
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, this.H);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          const txt = `r ${c.r.toFixed(2)}`;
+          const w = ctx.measureText(txt).width + 8;
+          ctx.fillStyle = th.traceBg;
+          this._roundRect(ctx, x + 2, 20, w, 15, 3);
+          ctx.fill();
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.fillStyle = col;
+          ctx.fillText(txt, x + 6, 28);
+        }
+        ctx.globalAlpha = 1;
+      }
       // selection
       const s = app.selection;
       if (s) {

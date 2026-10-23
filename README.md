@@ -55,6 +55,23 @@ Research and teaching tool, not a certified medical device.
   filter settling time added on both sides; epochs reaching beyond the
   recording or into a gap are skipped.
 
+## Find similar (template matching)
+Right-click a potential → **Find similar potentials**, or the magnifier next to
+a group (**F**). The group's aligned average (filtered, average reference, all
+mapped electrodes, ±100 ms by default) is correlated with the whole recording;
+candidates are peaks of the correlation r above a threshold (default 0.80) with
+an amplitude of ½–2× the template, at least 200 ms apart. Step through them
+with **Next ▶** (each is mapped), add with **Y**, reject with **X**, then
+average the group and search again with the improved template. A 3-hour
+recording is scanned in about 5 s.
+
+## 3D head map
+**2D | 3D** in the map section shows the same spline-interpolated field on a
+rotatable head (drag; presets Top, Front, Back, Left, Right and left/right
+views from below for the inferior temporal chain). **All views** exports the
+seven standard views as one PNG. Needs WebGL2 (current Chrome, Edge, Safari,
+Firefox).
+
 ## Per-trace gain and filters
 Click a channel name (e.g. *Fp2–F8*) to change gain, high-pass, low-pass and
 notch of that trace only. Adjusted traces are marked with a dot; the changes
@@ -77,6 +94,7 @@ the height differently (double-click resets).
 | P | cursor to GFP maximum |
 | E / double-click | mark event (into the selected group); N / Shift+N next / previous |
 | A | average the selected group / back to the recording |
+| F | find similar to the selected group; Y / X add / reject a candidate |
 | Space | play / pause |
 | G | go to time |
 | M | show / hide side panel |
@@ -100,5 +118,6 @@ repository (patient data are never committed; see `.gitignore`).
 Tests: `node tests/core.test.js && python3 -I tests/check_core.py .` (EDF
 decoding, filters, montages and splines against numpy/scipy), the map check
 (`tests/map_validate.mjs` + `tests/check_map.py`), the averaging check
-(`tests/ui_feedback.mjs` + `tests/check_average.py`) and the other headless
+(`tests/ui_feedback.mjs` + `tests/check_average.py`), the template-matching
+check (`tests/ui_stage2.mjs` + `tests/check_similar.py`) and the other headless
 Chrome scripts in `tests/`.

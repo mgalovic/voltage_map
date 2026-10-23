@@ -74,6 +74,14 @@
         const x = X(ev.t);
         ctx.fillRect(Math.round(x) - 1, 2, 2, this.H - 16);
       }
+      // find-similar candidates still to review
+      if (app.find && !app.avg) {
+        const g = app.groupById(app.find.gid);
+        ctx.fillStyle = g ? g.color : th.accent;
+        ctx.globalAlpha = 0.5;
+        for (const p of app.findVisible()) if (p.status === 'pending') ctx.fillRect(Math.round(X(p.t)), 6, 1, this.H - 20);
+        ctx.globalAlpha = 1;
+      }
       // page window
       const xa = X(app.view.t0),
         xb = X(app.view.t0 + app.view.dur);

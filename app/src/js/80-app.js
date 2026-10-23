@@ -42,12 +42,13 @@
     avgIncludeEars: false,
     anonymise: false,
     lastMontage: null,
-    map: { kind: 'V', ref: 'avg', scale: 'window', fixed: 100, contours: true, labels: true, values: false, equator: true, cmap: 'rdbu', invert: false, step: 'auto', maxMaps: 12, halfWindow: 0.3, res: 160, includeEars: false },
+    map: { kind: 'V', ref: 'avg', scale: 'window', fixed: 100, contours: true, labels: true, values: false, equator: true, cmap: 'rdbu', invert: false, step: 'auto', maxMaps: 12, halfWindow: 0.3, res: 160, includeEars: false, dim: '2d', cam: null },
     spline: { m: 4, lambda: 1e-5 },
     panelW: 400,
     panelOpen: true,
     panelSecs: { map: { open: true, w: 64 }, events: { open: true, w: 36 }, info: { open: false, w: 30 } },
     avgOpts: { align: 'gfp', search: 0.05, half: 1 },
+    findOpts: { win: '-0.1,0.1', rMin: 0.8, amp: '0.5,2' },
     eventType: 'spike',
     playSpeed: 1,
   };
@@ -76,6 +77,7 @@
       this.groups = [];
       this.activeGroup = '';
       this.avg = null;
+      this.find = null;
       this.lineOv = new Map();
       this.keys = { ctrl: false };
       this.selectedEvent = null;
@@ -285,6 +287,8 @@
     closeFile() {
       this.stopPlay();
       this.closePopover();
+      if (this.find) this.find.cancel = true;
+      this.find = null;
       if (this.avg) {
         this.settings.timebase = this.avg.stash.timebase;
         this.avg = null;
@@ -847,6 +851,218 @@
       this.selection = st.selection;
       this._afterSourceSwitch();
     }
+    /* ================= find similar (template matching) ================= */
+    async findSimilar(gid) {
+      const g = this.groupById(gid);
+      if (!g || !this.src) return;
+      if (this.avg) this.exitAverage();
+      if (this.find && this.find.status === 'running') this.find.cancel = true;
+      const evs = this.userEvents.filter((e) => e.group === gid);
+      if (!evs.length) return this.toast(`${g.name} has no events yet: mark at least one potential first, or right-click a potential → “Find similar”.`, 4500);
+      const fo = this.settings.findOpts;
+      const [a, b] = fo.win.split(',').map(Number);
+      const f = (this.find = { gid, status: 'running', progress: 0, cancel: false, peaks: [], cur: -1, win: [a, b], tn: evs.length });
+      this.openSection('events');
+      this.renderEvents();
+      const t0 = performance.now();
+      try {
+        // template = filtered average of the group's aligned events
+        const ao = this.settings.avgOpts;
+        let align = ao.align,
+          line = null;
+        if (align === 'neg' || align === 'pos') {
+          line = this.lines[this.highlight];
+          if (!line || line.kind !== 'line') align = 'gfp';
+        }
+        const avgIdx = this.avgIdx();
+        const ctx = { avgIdx, lapW: EEG.montage.hjorthWeights(this.src, this.eegIdx(), avgIdx), lineSpec: (l) => this.lineSpec(l) };
+        const spec = this.filterSpec();
+        const idx = this.mapElectrodes().used.map((u) => u.idx);
+        const res = await EEG.average.computeAverage({ src: this.src, pipe: this.pipe, spec, times: evs.map((e) => e.t), half: Math.max(0.5, b + 0.1, -a + 0.1), align, search: ao.search, gfpIdx: idx, line, ctx, meta: {} });
+        if (!res.source) throw new Error('the group’s events could not be read');
+        const fs = this.src.fs,
+          pre = Math.round(-a * fs),
+          L = pre + Math.round(b * fs) + 1;
+        const iz = Math.round(res.source.tZero * fs);
+        const w = await new EEG.pipeline.Pipeline(res.source).window((iz - pre) / fs, (iz - pre + L) / fs, spec);
+        const T = EEG.similar.templateFrom(w, idx, L);
+        f.tn = res.used.length;
+        f.E = idx.length;
+        const peaks = await EEG.similar.scan({
+          src: this.src, pipe: this.pipe, spec, idx, T, L, pre, floor: 0.5, refractory: 0.2, chunk: 120,
+          cancelled: () => f.cancel || this.find !== f,
+          onProgress: (x) => {
+            f.progress = x;
+            this._renderFindProgress();
+          },
+        });
+        if (!peaks || this.find !== f) return;
+        const members = this.userEvents.filter((e) => e.group === gid).map((e) => e.t);
+        peaks.forEach((p) => (p.status = members.some((t) => Math.abs(t - p.t) < 0.1) ? 'member' : 'pending'));
+        f.peaks = peaks;
+        f.status = 'done';
+        f.secs = (performance.now() - t0) / 1000;
+        const vis = this.findVisible();
+        this.toast(`${vis.filter((p) => p.status === 'pending').length} candidates similar to ${g.name} (r ≥ ${fo.rMin}). Review them with ▶ and add with Y.`, 4500);
+      } catch (e) {
+        console.error(e);
+        f.status = 'error';
+        this.toast('Search failed: ' + e.message, 6000, 'error');
+      }
+      this.renderEvents();
+      this.redrawEvents();
+    }
+    /* Right-click on a potential: put it into a new group and search for similar ones. */
+    findSimilarHere(t) {
+      if (this.avg) this.exitAverage();
+      this.newGroup();
+      this.addEvent(t);
+      this.findSimilar(this.activeGroup);
+    }
+    findVisible() {
+      const f = this.find;
+      if (!f || !f.peaks.length) return [];
+      const fo = this.settings.findOpts;
+      const [lo, hi] = fo.amp.split(',').map(Number);
+      return f.peaks.filter((p) => p.r >= fo.rMin && p.amp >= lo && p.amp <= hi);
+    }
+    findInView() {
+      if (!this.find || this.avg) return [];
+      const v = this.view;
+      return this.findVisible().filter((p) => p.status === 'pending' && p.t >= v.t0 && p.t <= v.t0 + v.dur);
+    }
+    findGoTo(p) {
+      if (!p) return;
+      if (this.avg) this.exitAverage();
+      this.find.cur = p;
+      const v = this.view;
+      if (p.t < v.t0 + v.dur * 0.15 || p.t > v.t0 + v.dur * 0.85) this.centerOn(p.t);
+      this.selection = null;
+      this.setCursor(p.t);
+      this._renderFindBox();
+    }
+    findStep(dir) {
+      const vis = this.findVisible();
+      if (!vis.length) return;
+      const cur = this.find.cur;
+      const ref = cur ? cur.t : this.cursor != null ? this.cursor : this.view.t0;
+      const pend = vis.filter((p) => p.status === 'pending');
+      const list = pend.length ? pend : vis;
+      const p = dir > 0 ? list.find((x) => x.t > ref + 1e-6) || list[0] : list.filter((x) => x.t < ref - 1e-6).pop() || list[list.length - 1];
+      this.findGoTo(p);
+    }
+    findAccept(p, advance = true) {
+      const f = this.find;
+      p = p || (f && f.cur);
+      if (!f || !p || p.status === 'accepted' || p.status === 'member') return advance && this.findStep(1);
+      const ev = { id: 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), t: Math.round(p.t * this.src.fs) / this.src.fs, dur: 0, type: this.settings.eventType, text: '', src: 'user', group: f.gid };
+      this.userEvents.push(ev);
+      this.userEvents.sort((a, b) => a.t - b.t);
+      this.saveEvents();
+      p.status = 'accepted';
+      p.evId = ev.id;
+      if (advance) this.findStep(1);
+      this.renderEvents();
+      this.redrawEvents();
+    }
+    findReject(p, advance = true) {
+      const f = this.find;
+      p = p || (f && f.cur);
+      if (!f || !p || p.status === 'member') return advance && this.findStep(1);
+      if (p.status === 'accepted' && p.evId) {
+        this.userEvents = this.userEvents.filter((e) => e.id !== p.evId);
+        this.saveEvents();
+      }
+      p.status = 'rejected';
+      if (advance) this.findStep(1);
+      this.renderEvents();
+      this.redrawEvents();
+    }
+    findAcceptAll() {
+      const pend = this.findVisible().filter((p) => p.status === 'pending');
+      pend.forEach((p) => this.findAccept(p, false));
+      const g = this.groupById(this.find.gid);
+      this.toast(`${pend.length} candidates added to ${g ? g.name : 'the group'}.`);
+    }
+    closeFind() {
+      if (this.find) this.find.cancel = true;
+      this.find = null;
+      this.renderEvents();
+      this.redrawEvents();
+    }
+    setFindOpt(patch) {
+      Object.assign(this.settings.findOpts, patch);
+      this.saveSettings();
+      this._renderFindBox();
+      this.redrawEvents();
+    }
+    _renderFindProgress() {
+      const bar = document.querySelector('.find-bar i'),
+        lab = document.querySelector('.find-prog-l');
+      if (bar) bar.style.width = Math.round(this.find.progress * 100) + '%';
+      if (lab) lab.textContent = `Scanning the recording… ${Math.round(this.find.progress * 100)} %`;
+    }
+    _renderFindBox() {
+      const old = document.querySelector('.find-box');
+      if (!old) return;
+      const box = this.findBox();
+      old.replaceWith(box);
+      const on = box.querySelector('.find-row.on');
+      if (on) on.scrollIntoView({ block: 'nearest' });
+    }
+    findBox() {
+      const f = this.find;
+      const g = this.groupById(f.gid) || { name: '?', color: '#888' };
+      const fo = this.settings.findOpts;
+      const sel = (val, opts, on, title) => {
+        const x = el('select', { class: 'sel xs', title, onchange: (e) => on(e.target.value) }, ...opts.map(([v, l]) => el('option', { value: String(v) }, l)));
+        x.value = String(val);
+        return x;
+      };
+      const box = el('div', { class: 'grp-box find-box' },
+        el('div', { class: 'grp-title' }, el('span', {}, el('i', { class: 'grp-dot', style: { background: g.color, display: 'inline-block', marginRight: '6px', verticalAlign: '-1px' } }), `Find similar · ${g.name}`),
+          el('button', { class: 'icon-btn xs', title: 'Close the search results', html: ICONS.x, onclick: () => this.closeFind() })));
+      if (f.status === 'running') {
+        box.append(el('div', { class: 'find-prog' }, el('span', { class: 'find-prog-l' }, `Scanning the recording… ${Math.round(f.progress * 100)} %`), el('button', { class: 'btn xs ghost', onclick: () => this.closeFind() }, 'Cancel')),
+          el('div', { class: 'find-bar' }, el('i', { style: { width: Math.round(f.progress * 100) + '%' } })));
+        return box;
+      }
+      const winOpts = [['-0.05,0.05', '±50 ms'], ['-0.1,0.1', '±100 ms'], ['-0.1,0.2', '−100…+200 ms'], ['-0.15,0.3', '−150…+300 ms']];
+      box.append(el('p', { class: 'grp-hint' }, `Template: average of ${f.tn} event${f.tn > 1 ? 's' : ''} of ${g.name} over `, sel(fo.win, winOpts, (v) => this.setFindOpt({ win: v }), 'Time window of the template around the alignment point'), ` (${f.E || '–'} electrodes). `,
+        el('button', { class: 'btn xs', title: 'Search the whole recording again (F) — e.g. after adding events, which improves the template', onclick: () => this.findSimilar(f.gid) }, 'Search again')));
+      if (f.status !== 'done') return box;
+      const vis = this.findVisible();
+      const n = (st) => vis.filter((p) => p.status === st).length;
+      box.append(el('div', { class: 'grp-opts' }, 'Similarity r ≥',
+        sel(fo.rMin, [0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95].map((v) => [v, v.toFixed(2)]), (v) => this.setFindOpt({ rMin: parseFloat(v) }), 'Minimum correlation between template and candidate (topography and time course)'),
+        'amplitude', sel(fo.amp, [['0,1e9', 'any'], ['0.33,3', '⅓–3×'], ['0.5,2', '½–2×'], ['0.67,1.5', '⅔–1½×']], (v) => this.setFindOpt({ amp: v }), 'Allowed amplitude relative to the template')));
+      box.append(el('div', { class: 'find-sum' }, `${vis.length} found · ${n('pending')} to review · ${n('accepted')} added · ${n('rejected')} rejected · ${n('member')} already in group` + (f.secs ? ` · ${f.secs.toFixed(1)} s` : '')));
+      const cur = f.cur && vis.includes(f.cur) ? vis.indexOf(f.cur) + 1 : 0;
+      box.append(el('div', { class: 'find-rev' },
+        el('button', { class: 'btn xs', title: 'Previous candidate', onclick: () => this.findStep(-1) }, '◀'),
+        el('span', { class: 'find-pos' }, cur ? `${cur} / ${vis.length}` : `– / ${vis.length}`),
+        el('button', { class: 'btn xs', title: 'Next candidate to review', onclick: () => this.findStep(1) }, 'Next ▶'),
+        el('button', { class: 'btn xs accent', disabled: !f.cur, title: 'Add this candidate to the group and go to the next (Y)', onclick: () => this.findAccept() }, '✓ Add (Y)'),
+        el('button', { class: 'btn xs', disabled: !f.cur, title: 'Reject this candidate and go to the next (X)', onclick: () => this.findReject() }, '✗ Reject (X)'),
+        el('button', { class: 'btn xs ghost', disabled: !n('pending'), title: 'Add every candidate still to review that passes the current thresholds', onclick: () => this.findAcceptAll() }, `Add all ${n('pending')}`)));
+      const list = el('div', { class: 'find-list' });
+      const ICON_ST = { pending: '○', accepted: '✓', rejected: '✗', member: '●' };
+      vis.slice(0, 400).forEach((p) => {
+        list.append(el('div', { class: `find-row ${p.status}` + (p === f.cur ? ' on' : ''), title: { pending: 'To review', accepted: 'Added to the group', rejected: 'Rejected', member: 'Already in the group' }[p.status], onclick: (e) => {
+          if (e.target.closest('button')) return;
+          this.findGoTo(p);
+        } },
+          el('span', { class: 'find-st' }, ICON_ST[p.status]), el('span', { class: 'ev-time' }, this.fmtRecClock(p.t, true)),
+          el('span', { class: 'find-r' }, el('i', { style: { width: Math.round(((p.r - 0.5) / 0.5) * 100) + '%' } }), `r ${p.r.toFixed(2)}`),
+          el('span', { class: 'grp-n' }, `${p.amp.toFixed(1)}×`),
+          el('button', { class: 'icon-btn xs', title: 'Add to group', onclick: () => this.findAccept(p, false) }, '✓'),
+          el('button', { class: 'icon-btn xs', title: 'Reject', onclick: () => this.findReject(p, false) }, '✗')));
+      });
+      if (vis.length > 400) list.append(el('div', { class: 'muted small' }, `… ${vis.length - 400} more; raise the similarity threshold to narrow the list.`));
+      box.append(list);
+      return box;
+    }
+
     _resetData() {
       this.page = null;
       this.lineData = null;
@@ -1207,7 +1423,7 @@
       // groups & averaging
       const box = el('div', { class: 'grp-box' }, el('div', { class: 'grp-title' }, el('span', { title: 'Average similar potentials and map the average' }, 'Groups · averaging'), el('button', { class: 'btn xs ghost', onclick: () => this.newGroup() }, '+ New group')));
       if (!this.groups.length) {
-        box.append(el('p', { class: 'grp-hint' }, 'To average similar potentials: create a group, mark each potential into it (E or double-click while the group is selected above), then press ', el('b', {}, 'Average'), '. The averaged EEG opens in the trace view and can be mapped like any time point.'));
+        box.append(el('p', { class: 'grp-hint' }, 'To collect and average similar potentials: right-click one on the EEG and choose ', el('b', {}, 'Find similar'), ', or create a group and mark potentials into it (E or double-click). ', el('b', {}, 'Average'), ' then shows the averaged EEG, which can be mapped like any time point.'));
       }
       this.groups.forEach((g) => {
         const n = this.userEvents.filter((e) => e.group === g.id).length;
@@ -1219,8 +1435,9 @@
           this.redrawEvents();
         }, onkeydown: (e) => e.key === 'Enter' && e.target.blur() });
         const avgBtn = el('button', { class: 'btn xs accent', disabled: !n, title: n ? `Average the ${n} event${n > 1 ? 's' : ''} of this group and show the averaged EEG and its voltage map` : 'No events in this group yet', onclick: () => (showing ? this.exitAverage() : this.averageGroup(g.id)) }, showing ? '← Back' : 'Average ▸');
+        const findBtn = el('button', { class: 'icon-btn xs', disabled: !n, title: 'Find similar potentials in the whole recording (F)', html: ICONS.search, onclick: () => this.findSimilar(g.id) });
         box.append(el('div', { class: 'grp-row' + (this.activeGroup === g.id ? ' active' : ''), title: this.activeGroup === g.id ? 'New events are added to this group' : '' },
-          el('i', { class: 'grp-dot', style: { background: g.color } }), name, el('span', { class: 'grp-n' }, `${n} event${n === 1 ? '' : 's'}`), avgBtn,
+          el('i', { class: 'grp-dot', style: { background: g.color } }), name, el('span', { class: 'grp-n' }, `${n} event${n === 1 ? '' : 's'}`), findBtn, avgBtn,
           el('button', { class: 'icon-btn xs', title: 'Delete group (its events are kept, without a group)', html: ICONS.trash, onclick: () => this.deleteGroup(g.id) })));
       });
       if (this.groups.length) {
@@ -1236,6 +1453,7 @@
           'epoch', sel(ao.half, [[0.5, '±0.5 s'], [1, '±1 s'], [2, '±2 s']], (v) => this.setAvgOpt({ half: parseFloat(v) }), 'Displayed length of the average around the alignment point')));
       }
       root.append(box);
+      if (this.find) root.append(this.findBox());
       if (!evs.length) {
         root.append(el('div', { class: 'ev-empty' }, 'No events yet. Press ', el('kbd', {}, 'E'), ' or double-click the EEG to mark a time point. Events are kept in this browser for this recording.'));
         return;
@@ -1570,7 +1788,10 @@
         { label: `Add ${EVENT_TYPES[this.settings.eventType].label.toLowerCase()} marker here` + (g ? ` (${g.name})` : ''), kbd: 'E', disabled: !!this.avg, action: () => this.addEvent(t) },
       ];
       if (this.avg) items.push({ label: '← Back to recording', kbd: 'A', action: () => this.exitAverage() });
-      else if (g) items.push({ label: `Average ${g.name}`, kbd: 'A', action: () => this.averageGroup(g.id) });
+      else {
+        items.push({ label: 'Find similar potentials (new group)…', action: () => this.findSimilarHere(t) });
+        if (g) items.push({ label: `Average ${g.name}`, kbd: 'A', action: () => this.averageGroup(g.id) });
+      }
       if (li >= 0) {
         items.push({ label: `Snap to peak on ${this.lines[li].label}`, kbd: 'Alt+click', action: () => this.snapToPeak(li, t) });
         const el2 = this.electrodesOfLine(li);
@@ -1619,7 +1840,7 @@
           el('h4', {}, 'Voltage map'),
           rows([['Click', 'Map that instant (cursor)'], ['Drag', 'Select window → map sequence + butterfly'], ['Drag cursor line', 'Scrub, map updates live'], ['Alt+click', 'Snap cursor to nearest peak of that trace'], ['Shift+click', 'Select from cursor to here'], ['Alt+← / Alt+→', 'Move cursor by 1 sample (Shift: 10)'], [', / .', 'Move cursor by 1 sample'], ['P', 'Cursor to GFP maximum'], ['Esc', 'Clear selection, then highlight']]),
           el('h4', {}, 'Events & averaging'),
-          rows([['Double-click / E', 'Mark event (into the selected group)'], ['N / Shift+N', 'Next / previous event'], ['A', 'Average the selected group / back to recording'], ['Del', 'Delete selected event']])));
+          rows([['Double-click / E', 'Mark event (into the selected group)'], ['N / Shift+N', 'Next / previous event'], ['Right-click', 'Find similar potentials (new group)'], ['F', 'Find similar to the selected group'], ['Y / X', 'Add / reject the candidate under review'], ['A', 'Average the selected group / back to recording'], ['Del', 'Delete selected event']])));
       const tabs = el('div', { class: 'dlg-tabs' });
       const holder = el('div');
       const guide = this.buildGuide();
@@ -1637,7 +1858,7 @@
 
     buildGuide() {
       const toc = [
-        ['Using the viewer', [['g-start', 'Quick start'], ['g-controls', 'The controls'], ['g-avg', 'Averaging a group']]],
+        ['Using the viewer', [['g-start', 'Quick start'], ['g-controls', 'The controls'], ['g-avg', 'Averaging a group'], ['g-find', 'Finding similar'], ['g-3d', '3D view']]],
         ['Understanding maps', [['g-what', 'What a map shows'], ['g-dipole', 'Fields and dipoles'], ['g-ref', 'Reference'], ['g-spline', 'Interpolation'], ['g-gfp', 'GFP and butterfly'], ['g-seq', 'Map sequence'], ['g-csd', 'CSD'], ['g-pit', 'Pitfalls']]],
         ['Reference', [['g-gloss', 'Glossary'], ['g-refs', 'Literature']]],
       ];
@@ -1878,6 +2099,21 @@
           case 'E':
             this.addEvent();
             break;
+          case 'f':
+          case 'F':
+            if (this.groupById(this.activeGroup)) this.findSimilar(this.activeGroup);
+            else this.toast('Select a group with events first, or right-click a potential → “Find similar”.', 3500);
+            break;
+          case 'y':
+          case 'Y':
+            if (this.find && this.find.cur) this.findAccept();
+            else handled = false;
+            break;
+          case 'x':
+          case 'X':
+            if (this.find && this.find.cur) this.findReject();
+            else handled = false;
+            break;
           case 'a':
           case 'A':
             if (this.avg) this.exitAverage();
@@ -1952,6 +2188,7 @@
     pause: SVG('<rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/>'),
     x: SVG('<path d="M18 6 6 18M6 6l12 12"/>'),
     trash: SVG('<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>'),
+    search: SVG('<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>'),
     eye: SVG('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
     eyeOff: SVG('<path d="M9.9 4.2A10.4 10.4 0 0 1 12 4c6.5 0 10 8 10 8a17 17 0 0 1-2.2 3.2M6.6 6.6C3.9 8.4 2 12 2 12s3.5 8 10 8a9.7 9.7 0 0 0 5.4-1.6M3 3l18 18"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>'),
   };
