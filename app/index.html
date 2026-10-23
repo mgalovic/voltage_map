@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- No network access at all: recordings opened here can never leave the computer. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src data: blob:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<title>EEG Viewer</title>
+<link rel="stylesheet" href="src/css/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--accent)"/><path d="M5 17h4l2-6 3 12 3-15 3 13 2-4h5" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span>EEG Viewer</span>
+  </div>
+  <div class="file-chip" id="file-chip"></div>
+  <button class="icon-btn" id="btn-anon" hidden></button>
+  <div class="top-actions">
+    <button class="btn primary" id="btn-open" title="Open recording (⌘/Ctrl+O)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1H3z"/><path d="M3 10h18l-2 9H5z"/></svg><span>Open</span></button>
+    <button class="btn ghost" id="btn-import-montage" title="Import BrainQuick montages (.bqm)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h7"/><path d="M18 14v7M14.5 17.5h7"/></svg><span class="lbl lbl-opt">Import montage</span></button>
+    <div class="top-sep"></div>
+    <button class="btn ghost" id="btn-theme" title="Light / dark theme"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><span class="lbl lbl-opt">Theme</span></button>
+    <button class="btn ghost" id="btn-settings" title="Settings: display, filters, calibration, maps"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="lbl">Settings</span></button>
+    <button class="btn ghost" id="btn-help" title="Keyboard & mouse, voltage map guide (?)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg><span class="lbl">Help</span></button>
+  </div>
+  <input type="file" id="file-input" accept=".edf,.EDF,.bdf,.BDF,.rec,.REC" hidden>
+  <input type="file" id="montage-input" accept=".bqm,.xml" multiple hidden>
+</header>
+
+<nav class="toolbar">
+  <label class="tb-field wide"><span>Montage</span><select class="sel" id="sel-montage"></select></label>
+  <div class="tb-sep"></div>
+  <div class="tb-field"><span>Sensitivity</span>
+    <div class="stepper">
+      <button class="icon-btn sm" id="btn-sens-down" title="Smaller traces (↓)">−</button>
+      <select class="sel" id="sel-sens"></select>
+      <button class="icon-btn sm" id="btn-sens-up" title="Larger traces (↑)">+</button>
+    </div>
+  </div>
+  <label class="tb-field"><span>Timebase</span><select class="sel" id="sel-timebase"></select></label>
+  <div class="tb-sep"></div>
+  <label class="tb-field"><span>High-pass</span><select class="sel" id="sel-hp"></select></label>
+  <label class="tb-field"><span>Low-pass</span><select class="sel" id="sel-lp"></select></label>
+  <label class="tb-field"><span>Notch</span><select class="sel" id="sel-notch"></select></label>
+  <div class="tb-spring"></div>
+  <div class="tb-field"><span>Review</span>
+    <div class="stepper"><button class="icon-btn sm" id="btn-play" title="Play / pause (Space)"></button><select class="sel" id="sel-speed" title="Playback speed"></select></div>
+  </div>
+  <button class="btn toggle" id="btn-map" title="Voltage map panel (M)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M10 5l2-3 2 3"/><circle cx="9" cy="11" r="1.4" fill="currentColor"/><circle cx="15" cy="11" r="1.4" fill="currentColor"/><circle cx="12" cy="16" r="1.4" fill="currentColor"/></svg>Voltage map</button>
+</nav>
+<div class="avg-banner" id="avg-banner" hidden></div>
+
+<main class="main">
+  <section class="traces" id="traces">
+    <div class="empty" id="empty">
+      <div class="empty-card">
+        <svg viewBox="0 0 64 64" width="56" height="56" aria-hidden="true"><rect x="2" y="2" width="60" height="60" rx="16" fill="var(--accent-soft)"/><path d="M10 34h8l4-12 6 24 6-30 6 26 4-8h10" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <h2>Open an EEG recording</h2>
+        <p>Drop an <b>EDF/EDF+</b> or <b>BDF</b> file anywhere in this window, or</p>
+        <button class="btn primary lg" id="empty-open">Choose file…</button>
+        <p class="muted small">Files are read locally in your browser. Nothing is uploaded.<br>BrainQuick montages (.bqm) can be dropped here too.</p>
+        <p class="muted small">Research and teaching tool, not a certified medical device.</p>
+      </div>
+    </div>
+  </section>
+  <div class="panel-resize" id="panel-resize" title="Drag to resize"></div>
+  <aside class="panel" id="panel">
+    <section class="psec" data-sec="map">
+      <header class="psec-head"><button class="psec-toggle" title="Show / hide"><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg><span>Voltage map</span></button><div class="psec-tools" id="map-tools"></div></header>
+      <div class="psec-body" id="tab-map"></div>
+    </section>
+    <div class="psec-split" data-between="map,events" title="Drag to resize"></div>
+    <section class="psec" data-sec="events">
+      <header class="psec-head"><button class="psec-toggle" title="Show / hide"><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg><span>Events &amp; groups</span><b class="psec-count" id="ev-count"></b></button><div class="psec-tools" id="ev-tools"></div></header>
+      <div class="psec-body" id="tab-events"></div>
+    </section>
+    <div class="psec-split" data-between="events,info" title="Drag to resize"></div>
+    <section class="psec" data-sec="info">
+      <header class="psec-head"><button class="psec-toggle" title="Show / hide"><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg><span>Recording</span></button></header>
+      <div class="psec-body" id="tab-info"></div>
+    </section>
+  </aside>
+</main>
+
+<footer class="foot">
+  <div class="overview-wrap"><canvas id="overview"></canvas></div>
+  <div class="status">
+    <span id="st-hover" class="mono"></span>
+    <span id="st-cursor" class="mono cursor-chip"></span>
+    <span id="st-note" class="muted"></span>
+    <span class="spring"></span>
+    <span id="st-info" class="muted"></span>
+    <span id="st-pos" class="mono muted"></span>
+  </div>
+</footer>
+
+<div class="drop" id="drop" hidden><div>Drop EEG file or .bqm montages</div></div>
+<div class="busy" id="busy" hidden><div class="spinner"></div><span></span></div>
+<div class="toasts" id="toasts"></div>
+
+<script src="src/js/00-core.js"></script>
+<script src="src/js/10-positions.js"></script>
+<script src="src/js/12-builtin-montages.js"></script>
+<script src="src/js/20-dsp.js"></script>
+<script src="src/js/30-edf.js"></script>
+<script src="src/js/35-formats.js"></script>
+<script src="src/js/40-montage.js"></script>
+<script src="src/js/45-pipeline.js"></script>
+<script src="src/js/47-average.js"></script>
+<script src="src/js/50-spline.js"></script>
+<script src="src/js/55-topomap.js"></script>
+<script src="src/js/60-traceview.js"></script>
+<script src="src/js/65-overview.js"></script>
+<script src="src/js/70-mappanel.js"></script>
+<script src="src/js/75-guide.js"></script>
+<script src="src/js/80-app.js"></script>
+<script src="src/js/99-main.js"></script>
+</body>
+</html>

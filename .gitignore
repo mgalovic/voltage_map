@@ -1,0 +1,17 @@
+# Patient recordings and anything derived from them must never be committed.
+example_files/
+*.edf
+*.EDF
+*.bdf
+*.BDF
+*.trc
+*.TRC
+*.rec
+*.REC
+tests/out_core.json
+tests/out*/
+# Screenshots from the clinical system (contain patient EEG)
+montages/*.png
+montages/*.jpg
+.DS_Store
+node_modules/
